@@ -1,0 +1,155 @@
+# Tapo Smart Plug Solar Control
+# Automatically controls smart plug based on solar inverter power output
+#
+# Improvements over original:
+# - Hysteresis to prevent rapid on/off cycling (turn ON at 4000W, turn OFF at 3500W)
+# - Consecutive low-power checks before turning off (prevents brief cloud cover from triggering off)
+# - Configurable thresholds via input_number helpers (adjustable from UI)
+# - Better error handling and state validation
+# - Cleaner notification logic with daily limit
+# - Added trace logging for debugging
+#
+# Required helpers (see helpers/tapo_solar_helpers.yaml):
+# - input_number.tapo_solar_threshold_on
+# - input_number.tapo_solar_threshold_off
+# - input_number.tapo_low_power_count
+# - input_number.tapo_low_power_checks_required
+# - input_boolean.notified_tapo_daily
+
+alias: "Tapo — Solar Power Control"
+description: >-
+  Controls TAPO smart plug based on solar inverter output.
+  Turns ON when power exceeds threshold, turns OFF after sustained low power.
+  Uses hysteresis and consecutive checks to prevent rapid cycling.
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: time_pattern
+    minutes: "/1"
+    id: "minute_check"
+
+conditions:
+  # Ensure sensor is available and has valid data
+  - condition: template
+    value_template: >-
+      {{ states('sensor.solar_inverter_inverter_active_power') | is_number }}
+
+actions:
+  - variables:
+      solar_power: >-
+        {{ states('sensor.solar_inverter_inverter_active_power') | float(0) }}
+      threshold_on: >-
+        {{ states('input_number.tapo_solar_threshold_on') | float(4000) }}
+      threshold_off: >-
+        {{ states('input_number.tapo_solar_threshold_off') | float(3500) }}
+      low_power_count: >-
+        {{ states('input_number.tapo_low_power_count') | int(0) }}
+      checks_required: >-
+        {{ states('input_number.tapo_low_power_checks_required') | int(3) }}
+      plug_state: >-
+        {{ states('switch.dan_smart_plug') }}
+      already_notified: >-
+        {{ is_state('input_boolean.notified_tapo_daily', 'on') }}
+
+  - choose:
+      # HIGH POWER: Turn on plug if above ON threshold
+      - conditions:
+          - condition: template
+            value_template: "{{ solar_power >= threshold_on }}"
+        sequence:
+          # Reset low power counter since we have good power
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.tapo_low_power_count
+            data:
+              value: 0
+
+          # Turn on plug if not already on
+          - if:
+              - condition: template
+                value_template: "{{ plug_state == 'off' }}"
+            then:
+              - action: switch.turn_on
+                target:
+                  entity_id: switch.dan_smart_plug
+
+              # Send notification only once per day
+              - if:
+                  - condition: template
+                    value_template: "{{ not already_notified }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      title: "TAPO Activated by Solar"
+                      message: >-
+                        Smart plug turned ON at {{ now().strftime('%H:%M') }}
+                        Solar power: {{ solar_power | round(0) }}W
+                        (threshold: {{ threshold_on }}W)
+                      notification_id: "tapo_solar_on"
+
+                  - action: notify.mobile_app_daniel
+                    data:
+                      title: "Solar — TAPO ON"
+                      message: >-
+                        Turned ON at {{ now().strftime('%H:%M') }} — {{ solar_power | round(0) }}W
+                      data:
+                        ttl: 600
+                        importance: default
+                        channel: solar_notifications
+
+                  - action: input_boolean.turn_on
+                    target:
+                      entity_id: input_boolean.notified_tapo_daily
+
+      # LOW POWER: Below OFF threshold - increment counter and maybe turn off
+      - conditions:
+          - condition: template
+            value_template: "{{ solar_power < threshold_off and plug_state == 'on' }}"
+        sequence:
+          - variables:
+              new_count: "{{ low_power_count + 1 }}"
+
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.tapo_low_power_count
+            data:
+              value: "{{ new_count }}"
+
+          # Only turn off after consecutive low-power checks
+          - if:
+              - condition: template
+                value_template: "{{ new_count >= checks_required }}"
+            then:
+              - action: switch.turn_off
+                target:
+                  entity_id: switch.dan_smart_plug
+
+              - action: input_number.set_value
+                target:
+                  entity_id: input_number.tapo_low_power_count
+                data:
+                  value: 0
+
+              - action: system_log.write
+                data:
+                  message: >-
+                    TAPO turned OFF after {{ checks_required }} low-power checks.
+                    Final reading: {{ solar_power }}W
+                  level: info
+                  logger: automation.tapo_solar
+
+      # MEDIUM POWER: Between thresholds - reset counter but don't change state
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ threshold_off <= solar_power < threshold_on }}
+        sequence:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.tapo_low_power_count
+            data:
+              value: 0
+
+    # Default: No action needed (handles edge cases)
+    default: []

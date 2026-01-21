@@ -1,0 +1,75 @@
+# Helper entities for Tapo Solar Control automation
+# Add these to your Home Assistant configuration
+#
+# Option 1: Add to configuration.yaml under input_number: and input_boolean:
+# Option 2: Create via UI: Settings > Devices & Services > Helpers
+
+# ============================================
+# INPUT NUMBERS
+# ============================================
+input_number:
+  # Power threshold to turn ON the plug (Watts)
+  # Using higher ON threshold than OFF creates hysteresis
+  tapo_solar_threshold_on:
+    name: "TAPO Solar ON Threshold"
+    icon: mdi:solar-power
+    min: 1000
+    max: 8000
+    step: 100
+    unit_of_measurement: "W"
+    initial: 4000
+
+  # Power threshold to turn OFF the plug (Watts)
+  # Lower than ON threshold to prevent rapid cycling
+  tapo_solar_threshold_off:
+    name: "TAPO Solar OFF Threshold"
+    icon: mdi:solar-power-variant
+    min: 500
+    max: 7000
+    step: 100
+    unit_of_measurement: "W"
+    initial: 3500
+
+  # Counter for consecutive low-power readings
+  # Tracks how many checks have been below threshold
+  tapo_low_power_count:
+    name: "TAPO Low Power Counter"
+    icon: mdi:counter
+    min: 0
+    max: 60
+    step: 1
+    initial: 0
+
+  # Number of consecutive low readings required before turning off
+  # At 1-minute checks, value of 3 = 3 minutes of low power before off
+  tapo_low_power_checks_required:
+    name: "TAPO Checks Before Off"
+    icon: mdi:timer-sand
+    min: 1
+    max: 10
+    step: 1
+    initial: 3
+
+# ============================================
+# INPUT BOOLEANS
+# ============================================
+input_boolean:
+  # Tracks whether daily notification has been sent
+  # Reset this at midnight via separate automation
+  notified_tapo_daily:
+    name: "TAPO Daily Notification Sent"
+    icon: mdi:bell-check
+
+# ============================================
+# AUTOMATION: Reset daily notification flag
+# ============================================
+# Add this automation to reset the notification flag at midnight:
+#
+# alias: "Reset TAPO Daily Notification Flag"
+# trigger:
+#   - trigger: time
+#     at: "00:00:00"
+# action:
+#   - action: input_boolean.turn_off
+#     target:
+#       entity_id: input_boolean.notified_tapo_daily
